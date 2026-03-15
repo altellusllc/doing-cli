@@ -1,4 +1,4 @@
-# doing-cli
+# doingapp
 
 A fast CLI task tracker — track what you're doing from the terminal.
 
@@ -17,13 +17,13 @@ $ doing done 42
 ## Install
 
 ```bash
-pipx install doing-cli
+pipx install doingapp
 ```
 
 Or with pip:
 
 ```bash
-pip install doing-cli
+pip install doingapp
 ```
 
 Requires Python 3.11+.
