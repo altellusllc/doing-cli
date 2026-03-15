@@ -1,0 +1,72 @@
+# doing-cli
+
+A fast CLI task tracker — track what you're doing from the terminal.
+
+```
+$ doing add "Write CLI docs"
+● Added: Write CLI docs  (#42)
+
+$ doing
+  ● #42  Write CLI docs
+  ● #41  Review PR
+
+$ doing done 42
+✓ Done: Write CLI docs
+```
+
+## Install
+
+```bash
+pipx install doing-cli
+```
+
+Or with pip:
+
+```bash
+pip install doing-cli
+```
+
+Requires Python 3.11+.
+
+## Getting started
+
+```bash
+doing login          # Log in with your Doing account
+doing add "My task"  # Add a task
+doing                # See what's on your plate
+doing done 1         # Mark task #1 as done
+```
+
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `doing` | Show active tasks (same as `doing ls`) |
+| `doing add <title>` | Add a task (`-n` notes, `-c` context ID) |
+| `doing done <id>` | Mark a task as done |
+| `doing pause <id>` | Pause a task |
+| `doing resume <id>` | Resume a paused task |
+| `doing reopen <id>` | Reopen a completed task |
+| `doing edit <id>` | Edit a task (`-t` title, `-n` notes, `-c` context, `--no-context`) |
+| `doing rm <id>` | Delete a task |
+| `doing ls` | List active tasks |
+| `doing log` | Show tasks done today (`-d YYYY-MM-DD` for other dates) |
+| `doing today` | Show all tasks grouped by status |
+| `doing clear` | Mark all active tasks as done |
+| `doing contexts` | List contexts |
+| `doing context add <name>` | Create a context |
+| `doing context rm <id>` | Delete a context |
+| `doing login` | Log in |
+| `doing logout` | Log out |
+
+## Configuration
+
+By default the CLI talks to `https://doingapp.co`. To point at a different server:
+
+```bash
+export DOING_API_URL=http://localhost:8001
+```
+
+## License
+
+MIT
