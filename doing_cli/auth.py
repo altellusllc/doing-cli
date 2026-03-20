@@ -5,8 +5,9 @@ TOKEN_FILE = TOKEN_DIR / "token"
 
 
 def save_token(token: str) -> None:
-    TOKEN_DIR.mkdir(parents=True, exist_ok=True)
+    TOKEN_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
     TOKEN_FILE.write_text(token)
+    TOKEN_FILE.chmod(0o600)
 
 
 def load_token() -> str | None:

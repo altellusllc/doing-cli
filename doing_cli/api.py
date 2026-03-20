@@ -1,10 +1,23 @@
 import os
+import time as _time
 
 import httpx
 
 from doing_cli.auth import load_token
 
 BASE_URL = os.environ.get("DOING_API_URL", "https://doingapp.co")
+
+
+def _local_tz() -> str:
+    try:
+        # Works on most Unix systems
+        return os.path.realpath("/etc/localtime").split("zoneinfo/")[1]
+    except (IndexError, OSError):
+        pass
+    tz = os.environ.get("TZ")
+    if tz:
+        return tz
+    return _time.tzname[0]
 
 
 def _client() -> httpx.Client:
@@ -42,7 +55,7 @@ def create_task(title: str, notes: str | None = None, context_id: int | None = N
 
 
 def list_tasks(status: str | None = None, date: str | None = None) -> list[dict]:
-    params = {}
+    params: dict = {"tz": _local_tz()}
     if status is not None:
         params["status"] = status
     if date is not None:
@@ -106,7 +119,7 @@ def delete_task(task_id: int) -> None:
 
 def get_today() -> dict:
     with _client() as c:
-        r = c.get("/today")
+        r = c.get("/today", params={"tz": _local_tz()})
         r.raise_for_status()
         return r.json()
 
