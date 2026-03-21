@@ -54,12 +54,15 @@ def create_task(title: str, notes: str | None = None, context_id: int | None = N
         return r.json()
 
 
-def list_tasks(status: str | None = None, date: str | None = None) -> list[dict]:
+def list_tasks(status: str | None = None, date: str | None = None,
+               context_id: int | None = None) -> list[dict]:
     params: dict = {"tz": _local_tz()}
     if status is not None:
         params["status"] = status
     if date is not None:
         params["date"] = date
+    if context_id is not None:
+        params["context_id"] = context_id
     with _client() as c:
         r = c.get("/tasks", params=params)
         r.raise_for_status()
@@ -117,9 +120,12 @@ def delete_task(task_id: int) -> None:
         r.raise_for_status()
 
 
-def get_today() -> dict:
+def get_today(context_id: int | None = None) -> dict:
+    params: dict = {"tz": _local_tz()}
+    if context_id is not None:
+        params["context_id"] = context_id
     with _client() as c:
-        r = c.get("/today", params={"tz": _local_tz()})
+        r = c.get("/today", params=params)
         r.raise_for_status()
         return r.json()
 

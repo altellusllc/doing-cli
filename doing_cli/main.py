@@ -76,7 +76,7 @@ def main(ctx: typer.Context):
     """Doing - track what you're working on."""
     if ctx.invoked_subcommand is None:
         _require_auth()
-        ls(json_output=False)
+        ls(context=None, json_output=False)
     elif ctx.invoked_subcommand not in AUTH_COMMANDS:
         _require_auth()
 
@@ -148,11 +148,12 @@ def add(
 
 @app.command()
 def ls(
+    context: int = typer.Option(None, "--context", "-c", help="Filter by context ID"),
     json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
 ):
     """Show what's on your plate right now."""
     try:
-        tasks = api.list_tasks(status="active")
+        tasks = api.list_tasks(status="active", context_id=context)
     except Exception as exc:
         _handle_api_error(exc)
     if json_output:
@@ -168,13 +169,14 @@ def ls(
 @app.command()
 def log(
     date: str = typer.Option(None, "--date", "-d", help="Date (YYYY-MM-DD), defaults to today"),
+    context: int = typer.Option(None, "--context", "-c", help="Filter by context ID"),
     json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
 ):
     """List tasks marked done today (or on a given date)."""
     from datetime import date as date_cls
     query_date = date if date else date_cls.today().isoformat()
     try:
-        tasks = api.list_tasks(status="done", date=query_date)
+        tasks = api.list_tasks(status="done", date=query_date, context_id=context)
     except Exception as exc:
         _handle_api_error(exc)
     if json_output:
@@ -255,11 +257,12 @@ def edit(
 
 @app.command()
 def today(
+    context: int = typer.Option(None, "--context", "-c", help="Filter by context ID"),
     json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
 ):
     """Show everything from today, grouped by status."""
     try:
-        data = api.get_today()
+        data = api.get_today(context_id=context)
     except Exception as exc:
         _handle_api_error(exc)
 
