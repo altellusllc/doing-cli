@@ -17,7 +17,7 @@ app.add_typer(context_app, name="context")
 console = Console()
 
 # Commands that don't require authentication
-AUTH_COMMANDS = {"login", "register", "logout"}
+AUTH_COMMANDS = {"login", "register", "logout", "apikey"}
 
 
 def _require_auth():
@@ -116,6 +116,20 @@ def logout():
     """Log out and clear stored credentials."""
     clear_token()
     console.print("[dim]Logged out.[/dim]")
+
+
+@app.command()
+def apikey(
+    key: str = typer.Option(None, "--key", "-k", help="API key (starts with doing_)"),
+):
+    """Save an API key for authentication (get one from the web UI)."""
+    if key is None:
+        key = typer.prompt("API key", hide_input=True)
+    if not key.startswith("doing_"):
+        console.print("[bold red]Invalid API key.[/bold red] Keys start with [bold]doing_[/bold]")
+        raise typer.Exit(code=1)
+    save_token(key)
+    console.print("[bold green]API key saved.[/bold green] You're all set.")
 
 
 @app.command()
