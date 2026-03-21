@@ -42,6 +42,13 @@ def login(email: str, password: str) -> dict:
         return r.json()
 
 
+def get_me() -> dict:
+    with _client() as c:
+        r = c.get("/auth/me")
+        r.raise_for_status()
+        return r.json()
+
+
 def create_task(title: str, notes: str | None = None, context_id: int | None = None) -> dict:
     payload: dict = {"title": title}
     if notes is not None:
@@ -50,6 +57,13 @@ def create_task(title: str, notes: str | None = None, context_id: int | None = N
         payload["context_id"] = context_id
     with _client() as c:
         r = c.post("/tasks", json=payload)
+        r.raise_for_status()
+        return r.json()
+
+
+def get_task(task_id: int) -> dict:
+    with _client() as c:
+        r = c.get(f"/tasks/{task_id}")
         r.raise_for_status()
         return r.json()
 

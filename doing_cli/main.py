@@ -1,4 +1,5 @@
 import json
+import sys
 
 import httpx
 import typer
@@ -19,15 +20,41 @@ console = Console()
 # Commands that don't require authentication
 AUTH_COMMANDS = {"login", "register", "logout", "apikey"}
 
+# Global JSON mode flag, set by --json on any command
+_json_mode = False
+
+
+def _output_json(data) -> None:
+    """Write raw JSON to stdout (no Rich formatting) and exit."""
+    sys.stdout.write(json.dumps(data) + "\n")
+    raise typer.Exit()
+
 
 def _require_auth():
     """Exit with a message if the user is not logged in."""
     if load_token() is None:
+        if _json_mode:
+            _output_json({"error": True, "detail": "Not logged in"})
         console.print("[bold red]Not logged in.[/bold red] Run: [bold]doing login[/bold]")
         raise typer.Exit(code=1)
 
 
 def _handle_api_error(exc: Exception):
+    if _json_mode:
+        error: dict = {"error": True}
+        if isinstance(exc, httpx.HTTPStatusError):
+            error["status"] = exc.response.status_code
+            try:
+                error["detail"] = exc.response.json().get("detail", exc.response.text)
+            except Exception:
+                error["detail"] = exc.response.text
+        elif isinstance(exc, (httpx.ConnectError, httpx.TimeoutException)):
+            error["detail"] = f"Could not connect to {api.BASE_URL}"
+        else:
+            error["detail"] = str(exc)
+        sys.stdout.write(json.dumps(error) + "\n")
+        raise typer.Exit(code=1)
+
     if isinstance(exc, httpx.HTTPStatusError):
         status = exc.response.status_code
         if status == 401:
@@ -72,11 +99,16 @@ def _print_done_task(task: dict) -> None:
 
 
 @app.callback()
-def main(ctx: typer.Context):
+def main(
+    ctx: typer.Context,
+    json_output: bool = typer.Option(False, "--json", "-j", help="Output as JSON (for scripting and AI agents)"),
+):
     """Doing - track what you're working on."""
+    global _json_mode
+    _json_mode = json_output
     if ctx.invoked_subcommand is None:
         _require_auth()
-        ls(context=None, json_output=False)
+        ls()
     elif ctx.invoked_subcommand not in AUTH_COMMANDS:
         _require_auth()
 
@@ -91,6 +123,8 @@ def login():
     except Exception as exc:
         _handle_api_error(exc)
     save_token(data["access_token"])
+    if _json_mode:
+        _output_json({"ok": True, "email": email})
     console.print(f"[bold green]Logged in[/bold green] as [bold]{email}[/bold]")
 
 
@@ -101,6 +135,8 @@ def register():
     password = typer.prompt("Password", hide_input=True)
     password_confirm = typer.prompt("Confirm password", hide_input=True)
     if password != password_confirm:
+        if _json_mode:
+            _output_json({"error": True, "detail": "Passwords do not match"})
         console.print("[bold red]Passwords do not match.[/bold red]")
         raise typer.Exit(code=1)
     try:
@@ -108,6 +144,8 @@ def register():
     except Exception as exc:
         _handle_api_error(exc)
     save_token(data["access_token"])
+    if _json_mode:
+        _output_json({"ok": True, "email": email})
     console.print(f"[bold green]Account created![/bold green] Logged in as [bold]{email}[/bold]")
 
 
@@ -115,6 +153,8 @@ def register():
 def logout():
     """Log out and clear stored credentials."""
     clear_token()
+    if _json_mode:
+        _output_json({"ok": True})
     console.print("[dim]Logged out.[/dim]")
 
 
@@ -126,10 +166,28 @@ def apikey(
     if key is None:
         key = typer.prompt("API key", hide_input=True)
     if not key.startswith("doing_"):
+        if _json_mode:
+            _output_json({"error": True, "detail": "Invalid API key. Keys start with doing_"})
         console.print("[bold red]Invalid API key.[/bold red] Keys start with [bold]doing_[/bold]")
         raise typer.Exit(code=1)
     save_token(key)
+    if _json_mode:
+        _output_json({"ok": True})
     console.print("[bold green]API key saved.[/bold green] You're all set.")
+
+
+@app.command()
+def me():
+    """Show current user info (useful for verifying auth)."""
+    try:
+        user = api.get_me()
+    except Exception as exc:
+        _handle_api_error(exc)
+    if _json_mode:
+        _output_json(user)
+    console.print(f"  [bold]{user['email']}[/bold]  [dim](#{user['id']})[/dim]")
+    if user.get("is_admin"):
+        console.print("  [yellow]Admin[/yellow]")
 
 
 @app.command()
@@ -143,22 +201,42 @@ def add(
         task = api.create_task(title, notes, context)
     except Exception as exc:
         _handle_api_error(exc)
+    if _json_mode:
+        _output_json(task)
     console.print(f"[green bold]●[/green bold] Added: [bold]{task['title']}[/bold]  [dim](#{task['id']})[/dim]")
+
+
+@app.command()
+def get(
+    task_id: int = typer.Argument(..., help="ID of the task to fetch"),
+):
+    """Get a single task by ID."""
+    try:
+        task = api.get_task(task_id)
+    except Exception as exc:
+        _handle_api_error(exc)
+    if _json_mode:
+        _output_json(task)
+    status_icon = {"active": "[green bold]●[/green bold]", "paused": "[yellow]⏸[/yellow]", "done": "[green]✓[/green]"}
+    icon = status_icon.get(task["status"], "?")
+    ctx = f"  [dim][{task['context_name']}][/dim]" if task.get("context_name") else ""
+    console.print(f"  {icon} [dim]#{task['id']}[/dim]  {task['title']}{ctx}")
+    if task.get("notes"):
+        console.print(f"       [dim]{task['notes']}[/dim]")
+    console.print(f"       [dim]Status: {task['status']}  Created: {task['created_at']}[/dim]")
 
 
 @app.command()
 def ls(
     context: int = typer.Option(None, "--context", "-c", help="Filter by context ID"),
-    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
 ):
     """Show what's on your plate right now."""
     try:
         tasks = api.list_tasks(status="active", context_id=context)
     except Exception as exc:
         _handle_api_error(exc)
-    if json_output:
-        console.print_json(json.dumps(tasks))
-        raise typer.Exit()
+    if _json_mode:
+        _output_json(tasks)
     if not tasks:
         console.print("Nothing on your plate. Add something: [bold]doing add 'task name'[/bold]")
         raise typer.Exit()
@@ -170,7 +248,6 @@ def ls(
 def log(
     date: str = typer.Option(None, "--date", "-d", help="Date (YYYY-MM-DD), defaults to today"),
     context: int = typer.Option(None, "--context", "-c", help="Filter by context ID"),
-    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
 ):
     """List tasks marked done today (or on a given date)."""
     from datetime import date as date_cls
@@ -179,9 +256,8 @@ def log(
         tasks = api.list_tasks(status="done", date=query_date, context_id=context)
     except Exception as exc:
         _handle_api_error(exc)
-    if json_output:
-        console.print_json(json.dumps(tasks))
-        raise typer.Exit()
+    if _json_mode:
+        _output_json(tasks)
     if not tasks:
         label = query_date if date else "today"
         console.print(f"Nothing marked done {label}.")
@@ -199,6 +275,8 @@ def done(
         task = api.mark_done(task_id)
     except Exception as exc:
         _handle_api_error(exc)
+    if _json_mode:
+        _output_json(task)
     console.print(f"[green]✓[/green] Done: [bold]{task['title']}[/bold]")
 
 
@@ -211,6 +289,8 @@ def reopen(
         task = api.reopen_task(task_id)
     except Exception as exc:
         _handle_api_error(exc)
+    if _json_mode:
+        _output_json(task)
     console.print(f"[green bold]●[/green bold] Reopened: [bold]{task['title']}[/bold]")
 
 
@@ -223,6 +303,8 @@ def pause(
         task = api.pause_task(task_id)
     except Exception as exc:
         _handle_api_error(exc)
+    if _json_mode:
+        _output_json(task)
     console.print(f"[yellow]⏸[/yellow] Paused: [bold]{task['title']}[/bold]")
 
 
@@ -235,6 +317,8 @@ def resume(
         task = api.resume_task(task_id)
     except Exception as exc:
         _handle_api_error(exc)
+    if _json_mode:
+        _output_json(task)
     console.print(f"[green bold]●[/green bold] Resumed: [bold]{task['title']}[/bold]")
 
 
@@ -252,13 +336,14 @@ def edit(
                                context_id=context, clear_context=no_context)
     except Exception as exc:
         _handle_api_error(exc)
+    if _json_mode:
+        _output_json(task)
     console.print(f"[green bold]Updated:[/green bold] {task['title']}  [dim](#{task['id']})[/dim]")
 
 
 @app.command()
 def today(
     context: int = typer.Option(None, "--context", "-c", help="Filter by context ID"),
-    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
 ):
     """Show everything from today, grouped by status."""
     try:
@@ -266,9 +351,8 @@ def today(
     except Exception as exc:
         _handle_api_error(exc)
 
-    if json_output:
-        console.print_json(json.dumps(data))
-        raise typer.Exit()
+    if _json_mode:
+        _output_json(data)
 
     active = data.get("active", [])
     paused = data.get("paused", [])
@@ -305,6 +389,8 @@ def rm(
         api.delete_task(task_id)
     except Exception as exc:
         _handle_api_error(exc)
+    if _json_mode:
+        _output_json({"deleted": True, "id": task_id})
     console.print(f"[dim]Deleted task #{task_id}.[/dim]")
 
 
@@ -317,16 +403,25 @@ def clear():
         _handle_api_error(exc)
 
     if not tasks:
+        if _json_mode:
+            _output_json([])
         console.print("Nothing to clear.")
         raise typer.Exit()
 
+    results = []
     for t in tasks:
         try:
-            api.mark_done(t["id"])
+            result = api.mark_done(t["id"])
+            results.append(result)
         except Exception:
-            console.print(f"[red]Failed to complete task #{t['id']}[/red]")
+            if not _json_mode:
+                console.print(f"[red]Failed to complete task #{t['id']}[/red]")
             continue
-        console.print(f"[green]✓[/green] Done: [bold]{t['title']}[/bold]")
+        if not _json_mode:
+            console.print(f"[green]✓[/green] Done: [bold]{t['title']}[/bold]")
+
+    if _json_mode:
+        _output_json(results)
 
     console.print(f"\n[dim]Cleared {len(tasks)} task(s).[/dim]")
 
@@ -338,6 +433,8 @@ def contexts():
         ctx_list = api.list_contexts()
     except Exception as exc:
         _handle_api_error(exc)
+    if _json_mode:
+        _output_json(ctx_list)
     if not ctx_list:
         console.print("No contexts. Create one: [bold]doing context add 'name'[/bold]")
         raise typer.Exit()
@@ -355,6 +452,8 @@ def context_add(
         ctx = api.create_context(name)
     except Exception as exc:
         _handle_api_error(exc)
+    if _json_mode:
+        _output_json(ctx)
     console.print(f"[green bold]Created context:[/green bold] {ctx['name']}  [dim](#{ctx['id']})[/dim]")
 
 
@@ -368,6 +467,8 @@ def context_rm(
         api.delete_context(context_id)
     except Exception as exc:
         _handle_api_error(exc)
+    if _json_mode:
+        _output_json({"deleted": True, "id": context_id})
     console.print(f"[dim]Deleted context #{context_id}.[/dim]")
 
 
