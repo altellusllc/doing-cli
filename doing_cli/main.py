@@ -75,6 +75,30 @@ def _handle_api_error(exc: Exception):
     raise typer.Exit(code=1)
 
 
+def _validation_error(detail: str):
+    """Print a validation error (JSON or Rich) and exit with code 1."""
+    if _json_mode:
+        _output_json({"error": True, "detail": detail})
+    console.print(f"[bold red]{detail}[/bold red]")
+    raise typer.Exit(code=1)
+
+
+def _validate_title(title: str) -> str:
+    """Strip whitespace and newlines from title, validate non-empty."""
+    cleaned = title.replace("\n", " ").replace("\r", " ").strip()
+    if not cleaned:
+        _validation_error("Title cannot be empty")
+    return cleaned
+
+
+def _validate_name(name: str) -> str:
+    """Strip and validate non-empty name for contexts."""
+    cleaned = name.strip()
+    if not cleaned:
+        _validation_error("Name cannot be empty")
+    return cleaned
+
+
 def _print_notes(task: dict) -> None:
     if task.get("notes"):
         console.print(f"       [dim]{task['notes']}[/dim]")
@@ -197,6 +221,7 @@ def add(
     context: int = typer.Option(None, "--context", "-c", help="Context ID"),
 ):
     """Add something to your plate."""
+    title = _validate_title(title)
     try:
         task = api.create_task(title, notes, context)
     except Exception as exc:
@@ -331,6 +356,16 @@ def edit(
     no_context: bool = typer.Option(False, "--no-context", help="Remove context"),
 ):
     """Edit a task's title, notes, or context."""
+    if no_context and context is not None:
+        _validation_error("--no-context and --context cannot be used together")
+
+    if title is None and notes is None and context is None and not no_context:
+        _validation_error("No changes specified. Use --title, --notes, --context, or --no-context.")
+
+    # BUG-8: Validate title if provided
+    if title is not None:
+        title = _validate_title(title)
+
     try:
         task = api.update_task(task_id, title=title, notes=notes,
                                context_id=context, clear_context=no_context)
@@ -447,7 +482,7 @@ def context_add(
     name: str = typer.Argument(..., help="Context name"),
 ):
     """Create a new context."""
-    _require_auth()
+    name = _validate_name(name)
     try:
         ctx = api.create_context(name)
     except Exception as exc:
@@ -462,7 +497,6 @@ def context_rm(
     context_id: int = typer.Argument(..., help="Context ID to delete"),
 ):
     """Delete a context (tasks keep their data, just lose the context)."""
-    _require_auth()
     try:
         api.delete_context(context_id)
     except Exception as exc:
