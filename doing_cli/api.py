@@ -28,9 +28,9 @@ def _client() -> httpx.Client:
     return httpx.Client(base_url=BASE_URL, timeout=10.0, headers=headers)
 
 
-def register(email: str, password: str) -> dict:
+def register(token: str, password: str) -> dict:
     with httpx.Client(base_url=BASE_URL, timeout=10.0) as c:
-        r = c.post("/auth/register", json={"email": email, "password": password})
+        r = c.post("/auth/register", json={"token": token, "password": password})
         r.raise_for_status()
         return r.json()
 
@@ -134,6 +134,29 @@ def delete_task(task_id: int) -> None:
         r.raise_for_status()
 
 
+def get_stats(context_id: int | None = None) -> dict:
+    params: dict = {"tz": _local_tz()}
+    if context_id is not None:
+        params["context_id"] = context_id
+    with _client() as c:
+        r = c.get("/stats", params=params)
+        r.raise_for_status()
+        return r.json()
+
+
+def get_done_history(limit: int = 7, before: str | None = None,
+                     context_id: int | None = None) -> dict:
+    params: dict = {"tz": _local_tz(), "limit": limit}
+    if before is not None:
+        params["before"] = before
+    if context_id is not None:
+        params["context_id"] = context_id
+    with _client() as c:
+        r = c.get("/done", params=params)
+        r.raise_for_status()
+        return r.json()
+
+
 def get_today(context_id: int | None = None) -> dict:
     params: dict = {"tz": _local_tz()}
     if context_id is not None:
@@ -157,6 +180,38 @@ def list_contexts() -> list[dict]:
 def create_context(name: str) -> dict:
     with _client() as c:
         r = c.post("/contexts", json={"name": name})
+        r.raise_for_status()
+        return r.json()
+
+
+def get_context(context_id: int) -> dict:
+    with _client() as c:
+        r = c.get(f"/contexts/{context_id}")
+        r.raise_for_status()
+        return r.json()
+
+
+def update_context(context_id: int, name: str, icon: str | None = None) -> dict:
+    payload: dict = {"name": name}
+    if icon is not None:
+        payload["icon"] = icon
+    with _client() as c:
+        r = c.put(f"/contexts/{context_id}", json=payload)
+        r.raise_for_status()
+        return r.json()
+
+
+def snooze_context(context_id: int) -> dict:
+    params: dict = {"tz": _local_tz()}
+    with _client() as c:
+        r = c.post(f"/contexts/{context_id}/snooze", params=params)
+        r.raise_for_status()
+        return r.json()
+
+
+def unsnooze_context(context_id: int) -> dict:
+    with _client() as c:
+        r = c.post(f"/contexts/{context_id}/unsnooze")
         r.raise_for_status()
         return r.json()
 

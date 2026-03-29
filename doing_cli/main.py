@@ -153,9 +153,10 @@ def login():
 
 
 @app.command()
-def register():
-    """Create a new Doing account."""
-    email = typer.prompt("Email")
+def register(
+    token: str = typer.Argument(..., help="Invite token from your invitation link"),
+):
+    """Create a new Doing account using an invite token."""
     password = typer.prompt("Password", hide_input=True)
     password_confirm = typer.prompt("Confirm password", hide_input=True)
     if password != password_confirm:
@@ -164,13 +165,13 @@ def register():
         console.print("[bold red]Passwords do not match.[/bold red]")
         raise typer.Exit(code=1)
     try:
-        data = api.register(email, password)
+        data = api.register(token, password)
     except Exception as exc:
         _handle_api_error(exc)
     save_token(data["access_token"])
     if _json_mode:
-        _output_json({"ok": True, "email": email})
-    console.print(f"[bold green]Account created![/bold green] Logged in as [bold]{email}[/bold]")
+        _output_json({"ok": True})
+    console.print("[bold green]Account created![/bold green] You're now logged in.")
 
 
 @app.command()
@@ -293,16 +294,28 @@ def log(
 
 @app.command()
 def done(
-    task_id: int = typer.Argument(..., help="ID of the task to mark done"),
+    task_ids: list[int] = typer.Argument(..., help="ID(s) of the task(s) to mark done"),
 ):
-    """Mark a task as done."""
-    try:
-        task = api.mark_done(task_id)
-    except Exception as exc:
-        _handle_api_error(exc)
+    """Mark one or more tasks as done."""
+    results = []
+    errors = []
+    for task_id in task_ids:
+        try:
+            task = api.mark_done(task_id)
+        except Exception as exc:
+            if _json_mode and len(task_ids) == 1:
+                _handle_api_error(exc)
+            if not _json_mode:
+                console.print(f"[red]Failed to complete task #{task_id}[/red]")
+            errors.append(task_id)
+            continue
+        results.append(task)
+        if not _json_mode:
+            console.print(f"[green]✓[/green] Done: [bold]{task['title']}[/bold]")
     if _json_mode:
-        _output_json(task)
-    console.print(f"[green]✓[/green] Done: [bold]{task['title']}[/bold]")
+        _output_json(results[0] if len(task_ids) == 1 and results else results)
+    if errors:
+        raise typer.Exit(code=1)
 
 
 @app.command()
@@ -362,7 +375,6 @@ def edit(
     if title is None and notes is None and context is None and not no_context:
         _validation_error("No changes specified. Use --title, --notes, --context, or --no-context.")
 
-    # BUG-8: Validate title if provided
     if title is not None:
         title = _validate_title(title)
 
@@ -492,6 +504,64 @@ def context_add(
     console.print(f"[green bold]Created context:[/green bold] {ctx['name']}  [dim](#{ctx['id']})[/dim]")
 
 
+@context_app.command("edit")
+def context_edit(
+    context_id: int = typer.Argument(..., help="Context ID to edit"),
+    name: str = typer.Option(None, "--name", "-n", help="New name"),
+    icon: str = typer.Option(None, "--icon", "-i", help="New icon (emoji)"),
+):
+    """Rename a context or change its icon."""
+    if name is None and icon is None:
+        _validation_error("No changes specified. Use --name or --icon.")
+
+    if name is not None:
+        name = _validate_name(name)
+
+    # Need current name if only changing icon (API requires name)
+    if name is None:
+        try:
+            current = api.get_context(context_id)
+        except Exception as exc:
+            _handle_api_error(exc)
+        name = current["name"]
+
+    try:
+        ctx = api.update_context(context_id, name=name, icon=icon)
+    except Exception as exc:
+        _handle_api_error(exc)
+    if _json_mode:
+        _output_json(ctx)
+    console.print(f"[green bold]Updated context:[/green bold] {ctx['name']}  [dim](#{ctx['id']})[/dim]")
+
+
+@context_app.command("snooze")
+def context_snooze(
+    context_id: int = typer.Argument(..., help="Context ID to snooze"),
+):
+    """Snooze a context until end of day (hides its tasks)."""
+    try:
+        ctx = api.snooze_context(context_id)
+    except Exception as exc:
+        _handle_api_error(exc)
+    if _json_mode:
+        _output_json(ctx)
+    console.print(f"[yellow]😴 Snoozed:[/yellow] {ctx['name']} until end of day")
+
+
+@context_app.command("unsnooze")
+def context_unsnooze(
+    context_id: int = typer.Argument(..., help="Context ID to unsnooze"),
+):
+    """Unsnooze a context (show its tasks again)."""
+    try:
+        ctx = api.unsnooze_context(context_id)
+    except Exception as exc:
+        _handle_api_error(exc)
+    if _json_mode:
+        _output_json(ctx)
+    console.print(f"[green bold]Unsnoozed:[/green bold] {ctx['name']}")
+
+
 @context_app.command("rm")
 def context_rm(
     context_id: int = typer.Argument(..., help="Context ID to delete"),
@@ -504,6 +574,31 @@ def context_rm(
     if _json_mode:
         _output_json({"deleted": True, "id": context_id})
     console.print(f"[dim]Deleted context #{context_id}.[/dim]")
+
+
+@app.command()
+def stats(
+    context: int = typer.Option(None, "--context", "-c", help="Filter by context ID"),
+):
+    """Show how many tasks you've completed today and this week."""
+    try:
+        data = api.get_stats(context_id=context)
+    except Exception as exc:
+        _handle_api_error(exc)
+
+    if _json_mode:
+        _output_json(data)
+
+    today_count = data["today"]
+    week_count = data["this_week"]
+    total_count = data["total"]
+
+    console.print(f"\n  [bold]Today:[/bold]     {today_count} task{'s' if today_count != 1 else ''} done")
+    console.print(f"  [bold]This week:[/bold] {week_count} task{'s' if week_count != 1 else ''} done")
+
+    if total_count > week_count:
+        console.print(f"  [dim]All time: {total_count} total[/dim]")
+    console.print()
 
 
 if __name__ == "__main__":
