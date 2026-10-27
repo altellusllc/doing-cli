@@ -1,5 +1,5 @@
 import os
-import time as _time
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 
@@ -8,16 +8,35 @@ from doing_cli.auth import load_token
 BASE_URL = os.environ.get("DOING_API_URL", "https://doingapp.co")
 
 
-def _local_tz() -> str:
+def _is_iana_tz(name: str) -> bool:
     try:
-        # Works on most Unix systems
-        return os.path.realpath("/etc/localtime").split("zoneinfo/")[1]
+        ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError):
+        return False
+    return True
+
+
+def _local_tz() -> str | None:
+    """IANA name of the local timezone, or None if it can't be determined.
+
+    TZ wins over /etc/localtime, as it does for the OS itself; containers
+    commonly set TZ while /etc/localtime still points at UTC. Abbreviations
+    like "MST" are never sent: the server would treat them as fixed offsets
+    with no DST. When this returns None the server uses the account timezone.
+    """
+    candidates = []
+    if tz := os.environ.get("TZ", "").lstrip(":"):
+        candidates.append(tz)
+    try:
+        candidates.append(os.path.realpath("/etc/localtime").split("zoneinfo/")[1])
     except (IndexError, OSError):
         pass
-    tz = os.environ.get("TZ")
-    if tz:
-        return tz
-    return _time.tzname[0]
+    return next((name for name in candidates if _is_iana_tz(name)), None)
+
+
+def _tz_params() -> dict:
+    tz = _local_tz()
+    return {"tz": tz} if tz else {}
 
 
 def _client() -> httpx.Client:
@@ -61,7 +80,7 @@ def create_task(title: str, notes: str | None = None, context_id: int | None = N
     if recurrence is not None:
         payload["recurrence"] = recurrence
     with _client() as c:
-        r = c.post("/tasks", json=payload, params={"tz": _local_tz()})
+        r = c.post("/tasks", json=payload, params=_tz_params())
         r.raise_for_status()
         return r.json()
 
@@ -75,7 +94,7 @@ def get_task(task_id: int) -> dict:
 
 def list_tasks(status: str | None = None, date: str | None = None,
                context_id: int | None = None) -> list[dict]:
-    params: dict = {"tz": _local_tz()}
+    params: dict = _tz_params()
     if status is not None:
         params["status"] = status
     if date is not None:
@@ -90,7 +109,7 @@ def list_tasks(status: str | None = None, date: str | None = None,
 
 def mark_done(task_id: int) -> dict:
     with _client() as c:
-        r = c.post(f"/tasks/{task_id}/done", params={"tz": _local_tz()})
+        r = c.post(f"/tasks/{task_id}/done", params=_tz_params())
         r.raise_for_status()
         return r.json()
 
@@ -138,7 +157,7 @@ def update_task(task_id: int, title: str | None = None, notes: str | None = None
     elif recurrence is not None:
         payload["recurrence"] = recurrence
     with _client() as c:
-        r = c.patch(f"/tasks/{task_id}", json=payload, params={"tz": _local_tz()})
+        r = c.patch(f"/tasks/{task_id}", json=payload, params=_tz_params())
         r.raise_for_status()
         return r.json()
 
@@ -146,7 +165,7 @@ def update_task(task_id: int, title: str | None = None, notes: str | None = None
 def snooze_task(task_id: int, minutes: int | None = None, preset: str | None = None) -> dict:
     payload: dict = {"minutes": minutes} if minutes is not None else {"preset": preset}
     with _client() as c:
-        r = c.post(f"/tasks/{task_id}/snooze", json=payload, params={"tz": _local_tz()})
+        r = c.post(f"/tasks/{task_id}/snooze", json=payload, params=_tz_params())
         r.raise_for_status()
         return r.json()
 
@@ -158,7 +177,7 @@ def delete_task(task_id: int) -> None:
 
 
 def get_stats(context_id: int | None = None) -> dict:
-    params: dict = {"tz": _local_tz()}
+    params: dict = _tz_params()
     if context_id is not None:
         params["context_id"] = context_id
     with _client() as c:
@@ -169,7 +188,7 @@ def get_stats(context_id: int | None = None) -> dict:
 
 def get_done_history(limit: int = 7, before: str | None = None,
                      context_id: int | None = None) -> dict:
-    params: dict = {"tz": _local_tz(), "limit": limit}
+    params: dict = {**_tz_params(), "limit": limit}
     if before is not None:
         params["before"] = before
     if context_id is not None:
@@ -181,7 +200,7 @@ def get_done_history(limit: int = 7, before: str | None = None,
 
 
 def get_today(context_id: int | None = None) -> dict:
-    params: dict = {"tz": _local_tz()}
+    params: dict = _tz_params()
     if context_id is not None:
         params["context_id"] = context_id
     with _client() as c:
@@ -225,7 +244,7 @@ def update_context(context_id: int, name: str, icon: str | None = None) -> dict:
 
 
 def snooze_context(context_id: int) -> dict:
-    params: dict = {"tz": _local_tz()}
+    params: dict = _tz_params()
     with _client() as c:
         r = c.post(f"/contexts/{context_id}/snooze", params=params)
         r.raise_for_status()
