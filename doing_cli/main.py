@@ -1,5 +1,7 @@
 import json
+import re
 import sys
+from datetime import datetime, timezone
 
 import httpx
 import typer
@@ -99,6 +101,51 @@ def _validate_name(name: str) -> str:
     return cleaned
 
 
+WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+
+
+def _normalize_repeat(value: str) -> str:
+    """Accept friendly repeat specs: daily, weekdays, mon,thu, 3d, or the raw API form."""
+    v = value.strip().lower().replace(" ", "")
+    if v in ("daily", "weekdays") or v.startswith(("weekly:", "after:")):
+        return v
+    if all(day in WEEKDAYS for day in v.split(",")):
+        return f"weekly:{v}"
+    if m := re.fullmatch(r"(\d+)d(ays?)?", v):
+        return f"after:{m.group(1)}"
+    _validation_error(f"Invalid --repeat '{value}'. Use daily, weekdays, mon,thu, or 3d (days after done).")
+
+
+def _describe_repeat(rule: str) -> str:
+    if rule.startswith("weekly:"):
+        return "every " + ", ".join(d.title() for d in rule.split(":", 1)[1].split(","))
+    if rule.startswith("after:"):
+        n = rule.split(":", 1)[1]
+        return f"{n} day{'s' if n != '1' else ''} after done"
+    return rule
+
+
+def _format_due(task: dict) -> str:
+    """Rich-formatted due label, e.g. '[red]overdue · Mon 3:00 PM[/red]'."""
+    if not task.get("due_at"):
+        return ""
+    due = datetime.fromisoformat(task["due_at"])
+    if due.tzinfo is None:
+        due = due.replace(tzinfo=timezone.utc)
+    due = due.astimezone()
+    now = datetime.now().astimezone()
+    if task.get("due_all_day"):
+        when = due.strftime("%a %b %-d")
+    elif due.date() == now.date():
+        when = due.strftime("%-I:%M %p")
+    else:
+        when = due.strftime("%a %b %-d %-I:%M %p")
+    repeat = f" ↻ {_describe_repeat(task['recurrence'])}" if task.get("recurrence") else ""
+    if task.get("status") == "active" and due <= now:
+        return f"  [bold red]⏰ overdue · {when}{repeat}[/bold red]"
+    return f"  [cyan]⏰ {when}{repeat}[/cyan]"
+
+
 def _print_notes(task: dict) -> None:
     if task.get("notes"):
         console.print(f"       [dim]{task['notes']}[/dim]")
@@ -106,13 +153,13 @@ def _print_notes(task: dict) -> None:
 
 def _print_active_task(task: dict) -> None:
     ctx = f"  [dim][{task['context_name']}][/dim]" if task.get("context_name") else ""
-    console.print(f"  [green bold]●[/green bold] [dim]#{task['id']}[/dim]  {task['title']}{ctx}")
+    console.print(f"  [green bold]●[/green bold] [dim]#{task['id']}[/dim]  {task['title']}{ctx}{_format_due(task)}")
     _print_notes(task)
 
 
 def _print_paused_task(task: dict) -> None:
     ctx = f"  [dim][{task['context_name']}][/dim]" if task.get("context_name") else ""
-    console.print(f"  [yellow]⏸[/yellow] [dim]#{task['id']}[/dim]  {task['title']}{ctx}")
+    console.print(f"  [yellow]⏸[/yellow] [dim]#{task['id']}[/dim]  {task['title']}{ctx}{_format_due(task)}")
     _print_notes(task)
 
 
@@ -220,16 +267,19 @@ def add(
     title: str = typer.Argument(..., help="What are you working on?"),
     notes: str = typer.Option(None, "--notes", "-n", help="Optional notes"),
     context: int = typer.Option(None, "--context", "-c", help="Context ID"),
+    due: str = typer.Option(None, "--due", "-d", help="When it's due, e.g. 'tomorrow 3pm', 'in 20m', 'friday'"),
+    repeat: str = typer.Option(None, "--repeat", "-r", help="daily, weekdays, mon,thu, or 3d (3 days after done)"),
 ):
     """Add something to your plate."""
     title = _validate_title(title)
+    recurrence = _normalize_repeat(repeat) if repeat else None
     try:
-        task = api.create_task(title, notes, context)
+        task = api.create_task(title, notes, context, due=due, recurrence=recurrence)
     except Exception as exc:
         _handle_api_error(exc)
     if _json_mode:
         _output_json(task)
-    console.print(f"[green bold]●[/green bold] Added: [bold]{task['title']}[/bold]  [dim](#{task['id']})[/dim]")
+    console.print(f"[green bold]●[/green bold] Added: [bold]{task['title']}[/bold]  [dim](#{task['id']})[/dim]{_format_due(task)}")
 
 
 @app.command()
@@ -246,7 +296,7 @@ def get(
     status_icon = {"active": "[green bold]●[/green bold]", "paused": "[yellow]⏸[/yellow]", "done": "[green]✓[/green]"}
     icon = status_icon.get(task["status"], "?")
     ctx = f"  [dim][{task['context_name']}][/dim]" if task.get("context_name") else ""
-    console.print(f"  {icon} [dim]#{task['id']}[/dim]  {task['title']}{ctx}")
+    console.print(f"  {icon} [dim]#{task['id']}[/dim]  {task['title']}{ctx}{_format_due(task)}")
     if task.get("notes"):
         console.print(f"       [dim]{task['notes']}[/dim]")
     console.print(f"       [dim]Status: {task['status']}  Created: {task['created_at']}[/dim]")
@@ -311,7 +361,8 @@ def done(
             continue
         results.append(task)
         if not _json_mode:
-            console.print(f"[green]✓[/green] Done: [bold]{task['title']}[/bold]")
+            next_due = f"  [dim]next:[/dim]{_format_due(task)}" if task.get("recurrence") else ""
+            console.print(f"[green]✓[/green] Done: [bold]{task['title']}[/bold]{next_due}")
     if _json_mode:
         _output_json(results[0] if len(task_ids) == 1 and results else results)
     if errors:
@@ -367,25 +418,60 @@ def edit(
     notes: str = typer.Option(None, "--notes", "-n", help="New notes"),
     context: int = typer.Option(None, "--context", "-c", help="Move to context ID"),
     no_context: bool = typer.Option(False, "--no-context", help="Remove context"),
+    due: str = typer.Option(None, "--due", "-d", help="When it's due, e.g. 'tomorrow 3pm'"),
+    no_due: bool = typer.Option(False, "--no-due", help="Remove due date (and repeat)"),
+    repeat: str = typer.Option(None, "--repeat", "-r", help="daily, weekdays, mon,thu, or 3d"),
+    no_repeat: bool = typer.Option(False, "--no-repeat", help="Stop repeating"),
 ):
-    """Edit a task's title, notes, or context."""
+    """Edit a task's title, notes, context, due date, or repeat."""
     if no_context and context is not None:
         _validation_error("--no-context and --context cannot be used together")
+    if no_due and due is not None:
+        _validation_error("--no-due and --due cannot be used together")
+    if no_repeat and repeat is not None:
+        _validation_error("--no-repeat and --repeat cannot be used together")
 
-    if title is None and notes is None and context is None and not no_context:
-        _validation_error("No changes specified. Use --title, --notes, --context, or --no-context.")
+    if (title is None and notes is None and context is None and not no_context
+            and due is None and not no_due and repeat is None and not no_repeat):
+        _validation_error("No changes specified. Use --title, --notes, --context, --due, or --repeat.")
 
     if title is not None:
         title = _validate_title(title)
+    recurrence = _normalize_repeat(repeat) if repeat else None
 
     try:
         task = api.update_task(task_id, title=title, notes=notes,
-                               context_id=context, clear_context=no_context)
+                               context_id=context, clear_context=no_context,
+                               due=due, clear_due=no_due,
+                               recurrence=recurrence, clear_recurrence=no_repeat)
     except Exception as exc:
         _handle_api_error(exc)
     if _json_mode:
         _output_json(task)
-    console.print(f"[green bold]Updated:[/green bold] {task['title']}  [dim](#{task['id']})[/dim]")
+    console.print(f"[green bold]Updated:[/green bold] {task['title']}  [dim](#{task['id']})[/dim]{_format_due(task)}")
+
+
+@app.command()
+def snooze(
+    task_id: int = typer.Argument(..., help="ID of the task to snooze"),
+    duration: str = typer.Argument("10m", help="10m, 1h, 3h, 1d, or 'morning' (tomorrow morning)"),
+):
+    """Push a task's due time back (stops the nagging until then)."""
+    d = duration.strip().lower()
+    minutes = preset = None
+    if d in ("morning", "tomorrow"):
+        preset = "tomorrow_morning"
+    elif m := re.fullmatch(r"(\d+)\s*(m|min|h|hr|d)", d):
+        minutes = int(m.group(1)) * {"m": 1, "min": 1, "h": 60, "hr": 60, "d": 1440}[m.group(2)]
+    else:
+        _validation_error(f"Invalid duration '{duration}'. Use 10m, 1h, 3h, 1d, or morning.")
+    try:
+        task = api.snooze_task(task_id, minutes=minutes, preset=preset)
+    except Exception as exc:
+        _handle_api_error(exc)
+    if _json_mode:
+        _output_json(task)
+    console.print(f"[cyan]💤 Snoozed:[/cyan] [bold]{task['title']}[/bold]{_format_due(task)}")
 
 
 @app.command()

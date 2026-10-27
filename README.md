@@ -48,13 +48,14 @@ doing apikey --key doing_xxxxx
 | Command | Description |
 |---------|-------------|
 | `doing` | Show active tasks (same as `doing ls`) |
-| `doing add <title>` | Add a task (`-n` notes, `-c` context ID) |
+| `doing add <title>` | Add a task (`-n` notes, `-c` context ID, `-d "tomorrow 3pm"` due, `-r daily` repeat) |
 | `doing get <id>` | Get a single task by ID |
 | `doing done <id>` | Mark a task as done |
 | `doing pause <id>` | Pause a task |
 | `doing resume <id>` | Resume a paused task |
 | `doing reopen <id>` | Reopen a completed task |
-| `doing edit <id>` | Edit a task (`-t` title, `-n` notes, `-c` context, `--no-context`) |
+| `doing edit <id>` | Edit a task (`-t` title, `-n` notes, `-c` context, `--no-context`, `-d` due, `--no-due`, `-r` repeat, `--no-repeat`) |
+| `doing snooze <id> [10m\|1h\|3h\|1d\|morning]` | Push a due task back (default 10m) |
 | `doing rm <id>` | Delete a task |
 | `doing ls` | List active tasks (`-c` context ID) |
 | `doing log` | Show tasks done today (`-d YYYY-MM-DD`, `-c` context ID) |
@@ -67,6 +68,19 @@ doing apikey --key doing_xxxxx
 | `doing login` | Log in |
 | `doing logout` | Log out |
 | `doing apikey` | Save an API key (`-k` key) |
+
+## Due dates and reminders
+
+Give a task a due date and the Doing iOS app nags you every few minutes once it's overdue, until you mark it done or snooze it.
+
+```bash
+doing add "Call mom" -d "tomorrow 3pm"
+doing add "Water plants" -d friday -r 3d      # repeats 3 days after each completion
+doing add "Standup notes" -d "9am" -r weekdays
+doing snooze 12 1h
+```
+
+`-d` accepts natural language: `in 20m`, `tonight`, `fri 9am`, `oct 30`. Dates without a time use your morning time (9:00 by default). `-r` accepts `daily`, `weekdays`, days like `mon,thu`, or `Nd` (N days after done).
 
 ## JSON output
 

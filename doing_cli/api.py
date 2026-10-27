@@ -49,14 +49,19 @@ def get_me() -> dict:
         return r.json()
 
 
-def create_task(title: str, notes: str | None = None, context_id: int | None = None) -> dict:
+def create_task(title: str, notes: str | None = None, context_id: int | None = None,
+                due: str | None = None, recurrence: str | None = None) -> dict:
     payload: dict = {"title": title}
     if notes is not None:
         payload["notes"] = notes
     if context_id is not None:
         payload["context_id"] = context_id
+    if due is not None:
+        payload["due"] = due
+    if recurrence is not None:
+        payload["recurrence"] = recurrence
     with _client() as c:
-        r = c.post("/tasks", json=payload)
+        r = c.post("/tasks", json=payload, params={"tz": _local_tz()})
         r.raise_for_status()
         return r.json()
 
@@ -85,7 +90,7 @@ def list_tasks(status: str | None = None, date: str | None = None,
 
 def mark_done(task_id: int) -> dict:
     with _client() as c:
-        r = c.post(f"/tasks/{task_id}/done")
+        r = c.post(f"/tasks/{task_id}/done", params={"tz": _local_tz()})
         r.raise_for_status()
         return r.json()
 
@@ -112,7 +117,9 @@ def resume_task(task_id: int) -> dict:
 
 
 def update_task(task_id: int, title: str | None = None, notes: str | None = None,
-                context_id: int | None = None, clear_context: bool = False) -> dict:
+                context_id: int | None = None, clear_context: bool = False,
+                due: str | None = None, recurrence: str | None = None,
+                clear_due: bool = False, clear_recurrence: bool = False) -> dict:
     payload: dict = {}
     if title is not None:
         payload["title"] = title
@@ -122,8 +129,24 @@ def update_task(task_id: int, title: str | None = None, notes: str | None = None
         payload["clear_context"] = True
     elif context_id is not None:
         payload["context_id"] = context_id
+    if clear_due:
+        payload["clear_due"] = True
+    elif due is not None:
+        payload["due"] = due
+    if clear_recurrence:
+        payload["clear_recurrence"] = True
+    elif recurrence is not None:
+        payload["recurrence"] = recurrence
     with _client() as c:
-        r = c.patch(f"/tasks/{task_id}", json=payload)
+        r = c.patch(f"/tasks/{task_id}", json=payload, params={"tz": _local_tz()})
+        r.raise_for_status()
+        return r.json()
+
+
+def snooze_task(task_id: int, minutes: int | None = None, preset: str | None = None) -> dict:
+    payload: dict = {"minutes": minutes} if minutes is not None else {"preset": preset}
+    with _client() as c:
+        r = c.post(f"/tasks/{task_id}/snooze", json=payload, params={"tz": _local_tz()})
         r.raise_for_status()
         return r.json()
 
