@@ -370,6 +370,35 @@ def done(
 
 
 @app.command()
+def touch(
+    task_ids: list[int] = typer.Argument(..., help="ID(s) of the task(s) to touch"),
+):
+    """Mark tasks as still in progress: resets the staleness timer and moves them to the top."""
+    results = []
+    errors = []
+    for task_id in task_ids:
+        try:
+            task = api.touch_task(task_id)
+        except Exception as exc:
+            if _json_mode and len(task_ids) == 1:
+                _handle_api_error(exc)
+            if not _json_mode:
+                detail = ""
+                if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 400:
+                    detail = f": {exc.response.json().get('detail', '')}"
+                console.print(f"[red]Failed to touch task #{task_id}{detail}[/red]")
+            errors.append(task_id)
+            continue
+        results.append(task)
+        if not _json_mode:
+            console.print(f"[green bold]●[/green bold] Touched: [bold]{task['title']}[/bold]")
+    if _json_mode:
+        _output_json(results[0] if len(task_ids) == 1 and results else results)
+    if errors:
+        raise typer.Exit(code=1)
+
+
+@app.command()
 def reopen(
     task_id: int = typer.Argument(..., help="ID of the task to reopen"),
 ):

@@ -51,6 +51,7 @@ doing apikey --key doing_xxxxx
 | `doing add <title>` | Add a task (`-n` notes, `-c` context ID, `-d "tomorrow 3pm"` due, `-r daily` repeat) |
 | `doing get <id>` | Get a single task by ID |
 | `doing done <id>` | Mark a task as done |
+| `doing touch <id>...` | Reset a task's staleness timer and move it to the top |
 | `doing pause <id>` | Pause a task |
 | `doing resume <id>` | Resume a paused task |
 | `doing reopen <id>` | Reopen a completed task |

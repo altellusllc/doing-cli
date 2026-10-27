@@ -128,6 +128,13 @@ def pause_task(task_id: int) -> dict:
         return r.json()
 
 
+def touch_task(task_id: int) -> dict:
+    with _client() as c:
+        r = c.post(f"/tasks/{task_id}/touch")
+        r.raise_for_status()
+        return r.json()
+
+
 def resume_task(task_id: int) -> dict:
     with _client() as c:
         r = c.post(f"/tasks/{task_id}/resume")
