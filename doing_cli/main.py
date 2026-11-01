@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import httpx
 import typer
 from rich.console import Console
+from rich.markup import escape
 
 from doing_cli import api
 from doing_cli.auth import load_token, save_token, clear_token
@@ -41,6 +42,17 @@ def _require_auth():
         raise typer.Exit(code=1)
 
 
+def _error_detail(response: httpx.Response) -> str:
+    """The API's human-readable message, including FastAPI's 422 validation format."""
+    try:
+        detail = response.json().get("detail", response.text)
+    except Exception:
+        return response.text
+    if isinstance(detail, list):
+        return "; ".join(str(d.get("msg", d)).removeprefix("Value error, ") for d in detail)
+    return str(detail)
+
+
 def _handle_api_error(exc: Exception):
     if _json_mode:
         error: dict = {"error": True}
@@ -66,7 +78,7 @@ def _handle_api_error(exc: Exception):
         elif status == 404:
             console.print("[bold red]Not found.[/bold red]")
         else:
-            console.print(f"[bold red]API error ({status}):[/bold red] {exc.response.text}")
+            console.print(f"[bold red]API error ({status}):[/bold red] {escape(_error_detail(exc.response))}")
     elif isinstance(exc, (httpx.ConnectError, httpx.TimeoutException)):
         console.print(
             f"[bold red]Could not connect to the Doing API at {api.BASE_URL}[/bold red]\n"
@@ -81,7 +93,7 @@ def _validation_error(detail: str):
     """Print a validation error (JSON or Rich) and exit with code 1."""
     if _json_mode:
         _output_json({"error": True, "detail": detail})
-    console.print(f"[bold red]{detail}[/bold red]")
+    console.print(f"[bold red]{escape(detail)}[/bold red]")
     raise typer.Exit(code=1)
 
 
@@ -104,16 +116,53 @@ def _validate_name(name: str) -> str:
 WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 
 
+REPEAT_HELP = (
+    "daily, weekdays, mon,thu, 3d (3 days after done), monthly, quarterly, yearly, "
+    "3mo, or monthly:15 / monthly:last / monthly:2tue / monthly:lastfri (add /3 for every 3 months)"
+)
+
+
 def _normalize_repeat(value: str) -> str:
-    """Accept friendly repeat specs: daily, weekdays, mon,thu, 3d, or the raw API form."""
+    """Accept friendly repeat specs and turn them into the API's rule format.
+
+    Monthly shorthands without a day ("monthly", "quarterly", "3mo") are sent
+    without an anchor; the server takes the day from the task's due date.
+    """
     v = value.strip().lower().replace(" ", "")
-    if v in ("daily", "weekdays") or v.startswith(("weekly:", "after:")):
+    if v in ("daily", "weekdays") or v.startswith(("weekly:", "after:", "monthly")):
         return v
+    if v == "quarterly":
+        return "monthly/3"
+    if v in ("yearly", "annually"):
+        return "monthly/12"
+    if m := re.fullmatch(r"(\d+)(mo|months?)", v):
+        return "monthly" if m.group(1) == "1" else f"monthly/{m.group(1)}"
     if all(day in WEEKDAYS for day in v.split(",")):
         return f"weekly:{v}"
     if m := re.fullmatch(r"(\d+)d(ays?)?", v):
         return f"after:{m.group(1)}"
-    _validation_error(f"Invalid --repeat '{value}'. Use daily, weekdays, mon,thu, or 3d (days after done).")
+    _validation_error(f"Invalid --repeat '{value}'. Use {REPEAT_HELP}.")
+
+
+def _ordinal(n: int) -> str:
+    suffix = "th" if 10 <= n % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
+
+
+def _describe_monthly(rule: str) -> str:
+    body = rule.split(":", 1)[1] if ":" in rule else rule
+    anchor, _, every = body.partition("/")
+    if anchor == "last":
+        day = "the last day"
+    elif anchor.isdigit():
+        day = f"the {_ordinal(int(anchor))}"
+    elif anchor.startswith("last"):
+        day = f"the last {anchor[4:].title()}"
+    else:
+        day = f"the {_ordinal(int(anchor[0]))} {anchor[1:].title()}"
+    n = int(every or 1)
+    period = {1: "monthly", 3: "quarterly", 12: "yearly"}.get(n, f"every {n} months")
+    return f"{period} on {day}"
 
 
 def _describe_repeat(rule: str) -> str:
@@ -122,6 +171,8 @@ def _describe_repeat(rule: str) -> str:
     if rule.startswith("after:"):
         n = rule.split(":", 1)[1]
         return f"{n} day{'s' if n != '1' else ''} after done"
+    if rule.startswith("monthly:"):
+        return _describe_monthly(rule)
     return rule
 
 
@@ -268,7 +319,7 @@ def add(
     notes: str = typer.Option(None, "--notes", "-n", help="Optional notes"),
     context: int = typer.Option(None, "--context", "-c", help="Context ID"),
     due: str = typer.Option(None, "--due", "-d", help="When it's due, e.g. 'tomorrow 3pm', 'in 20m', 'friday'"),
-    repeat: str = typer.Option(None, "--repeat", "-r", help="daily, weekdays, mon,thu, or 3d (3 days after done)"),
+    repeat: str = typer.Option(None, "--repeat", "-r", help=REPEAT_HELP),
 ):
     """Add something to your plate."""
     title = _validate_title(title)
@@ -449,7 +500,7 @@ def edit(
     no_context: bool = typer.Option(False, "--no-context", help="Remove context"),
     due: str = typer.Option(None, "--due", "-d", help="When it's due, e.g. 'tomorrow 3pm'"),
     no_due: bool = typer.Option(False, "--no-due", help="Remove due date (and repeat)"),
-    repeat: str = typer.Option(None, "--repeat", "-r", help="daily, weekdays, mon,thu, or 3d"),
+    repeat: str = typer.Option(None, "--repeat", "-r", help=REPEAT_HELP),
     no_repeat: bool = typer.Option(False, "--no-repeat", help="Stop repeating"),
 ):
     """Edit a task's title, notes, context, due date, or repeat."""

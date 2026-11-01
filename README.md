@@ -78,10 +78,22 @@ Give a task a due date and the Doing iOS app nags you every few minutes once it'
 doing add "Call mom" -d "tomorrow 3pm"
 doing add "Water plants" -d friday -r 3d      # repeats 3 days after each completion
 doing add "Standup notes" -d "9am" -r weekdays
+doing add "Pay rent" -d "dec 1" -r monthly
+doing add "Board meeting" -d "nov 10 9am" -r monthly:2tue
 doing snooze 12 1h
 ```
 
-`-d` accepts natural language: `in 20m`, `tonight`, `fri 9am`, `oct 30`. Dates without a time use your morning time (9:00 by default). `-r` accepts `daily`, `weekdays`, days like `mon,thu`, or `Nd` (N days after done).
+`-d` accepts natural language: `in 20m`, `tonight`, `fri 9am`, `oct 30`. Dates without a time use your morning time (9:00 by default). `-r` accepts `daily`, `weekdays`, days like `mon,thu`, `Nd` (N days after done), or monthly rules:
+
+| `-r` | Repeats |
+|------|---------|
+| `monthly` | same day each month as the due date |
+| `quarterly`, `yearly`, `6mo` | every 3, 12, or 6 months, same day |
+| `monthly:15` | the 15th (a 31st clamps to the end of short months) |
+| `monthly:last` | the last day of the month |
+| `monthly:2tue` | the 2nd Tuesday |
+| `monthly:lastfri` | the last Friday |
+| `monthly:15/3` | the 15th, every 3 months |
 
 ## JSON output
 
