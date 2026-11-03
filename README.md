@@ -48,19 +48,19 @@ doing apikey --key doing_xxxxx
 | Command | Description |
 |---------|-------------|
 | `doing` | Show active tasks (same as `doing ls`) |
-| `doing add <title>` | Add a task (`-n` notes, `-c` context ID, `-d "tomorrow 3pm"` due, `-r daily` repeat) |
+| `doing add <title>` | Add a task (`-x` next action, `-n` notes, `-c` context ID, `-d "tomorrow 3pm"` due, `-r daily` repeat) |
 | `doing get <id>` | Get a single task by ID |
 | `doing done <id>` | Mark a task as done |
 | `doing touch <id>...` | Reset a task's staleness timer and move it to the top |
 | `doing pause <id>` | Pause a task |
 | `doing resume <id>` | Resume a paused task |
 | `doing reopen <id>` | Reopen a completed task |
-| `doing edit <id>` | Edit a task (`-t` title, `-n` notes, `-c` context, `--no-context`, `-d` due, `--no-due`, `-r` repeat, `--no-repeat`) |
+| `doing edit <id>` | Edit a task (`-t` title, `-x` next action, `--no-next`, `-n` notes, `-c` context, `--no-context`, `-d` due, `--no-due`, `-r` repeat, `--no-repeat`) |
 | `doing snooze <id> [10m\|1h\|3h\|1d\|morning]` | Push a due task back (default 10m) |
 | `doing rm <id>` | Delete a task |
-| `doing ls` | List active tasks (`-c` context ID) |
+| `doing ls` | List active tasks, grouped by due date (`-c` context ID, `-n` show notes) |
 | `doing log` | Show tasks done today (`-d YYYY-MM-DD`, `-c` context ID) |
-| `doing today` | Show all tasks grouped by status (`-c` context ID) |
+| `doing today` | Show all tasks grouped by status (`-c` context ID, `-n` show notes) |
 | `doing clear` | Mark all active tasks as done |
 | `doing contexts` | List contexts |
 | `doing context add <name>` | Create a context |
@@ -69,6 +69,20 @@ doing apikey --key doing_xxxxx
 | `doing login` | Log in |
 | `doing logout` | Log out |
 | `doing apikey` | Save an API key (`-k` key) |
+
+## Next actions and notes
+
+Every task can have a **next action**: one short, concrete thing to do next. It always shows under the task in the list. Notes hold the background and stay hidden unless you ask for them (`doing ls -n`, or `doing get <id>`).
+
+```bash
+doing add "Send Q4 estimated tax" -x "Pay \$4,200 in EFTPS" -n "Amount is from the tax sheet, row 14"
+doing edit 341 -x "Save the confirmation PDF"
+doing edit 341 --no-next
+```
+
+**For AI agents:** whenever you add or change notes, also set `--next` to a short next action in the imperative, under 80 characters (for example `--next "Email Dana the revised quote"`). When you finish it, replace it with the one after it.
+
+Active tasks are listed in groups: Overdue, Today, No due date, Tomorrow, Next 7 days, Future.
 
 ## Due dates and reminders
 

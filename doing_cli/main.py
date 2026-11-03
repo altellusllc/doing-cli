@@ -176,14 +176,20 @@ def _describe_repeat(rule: str) -> str:
     return rule
 
 
-def _format_due(task: dict) -> str:
-    """Rich-formatted due label, e.g. '[red]overdue · Mon 3:00 PM[/red]'."""
+def _local_due(task: dict) -> datetime | None:
     if not task.get("due_at"):
-        return ""
+        return None
     due = datetime.fromisoformat(task["due_at"])
     if due.tzinfo is None:
         due = due.replace(tzinfo=timezone.utc)
-    due = due.astimezone()
+    return due.astimezone()
+
+
+def _format_due(task: dict) -> str:
+    """Rich-formatted due label, e.g. '[red]overdue · Mon 3:00 PM[/red]'."""
+    due = _local_due(task)
+    if due is None:
+        return ""
     now = datetime.now().astimezone()
     if task.get("due_all_day"):
         when = due.strftime("%a %b %-d")
@@ -197,27 +203,81 @@ def _format_due(task: dict) -> str:
     return f"  [cyan]⏰ {when}{repeat}[/cyan]"
 
 
-def _print_notes(task: dict) -> None:
-    if task.get("notes"):
+def _print_notes(task: dict, show_notes: bool = True) -> None:
+    """Print the next action (always) and the notes (only when asked).
+
+    Hidden notes leave a '+note' marker so you know there's more to see.
+    """
+    marker = "  [dim]+note[/dim]" if task.get("notes") and not show_notes else ""
+    if task.get("next_action"):
+        console.print(f"       [green]→ {escape(task['next_action'])}[/green]{marker}")
+    elif marker:
+        console.print(f"     {marker}")
+    if show_notes and task.get("notes"):
         console.print(f"       [dim]{task['notes']}[/dim]")
 
 
-def _print_active_task(task: dict) -> None:
+def _print_active_task(task: dict, show_notes: bool = True) -> None:
     ctx = f"  [dim][{task['context_name']}][/dim]" if task.get("context_name") else ""
     console.print(f"  [green bold]●[/green bold] [dim]#{task['id']}[/dim]  {task['title']}{ctx}{_format_due(task)}")
-    _print_notes(task)
+    _print_notes(task, show_notes)
 
 
-def _print_paused_task(task: dict) -> None:
+def _print_paused_task(task: dict, show_notes: bool = True) -> None:
     ctx = f"  [dim][{task['context_name']}][/dim]" if task.get("context_name") else ""
     console.print(f"  [yellow]⏸[/yellow] [dim]#{task['id']}[/dim]  {task['title']}{ctx}{_format_due(task)}")
-    _print_notes(task)
+    _print_notes(task, show_notes)
 
 
-def _print_done_task(task: dict) -> None:
+def _print_done_task(task: dict, show_notes: bool = True) -> None:
     ctx = f"  [{task['context_name']}]" if task.get("context_name") else ""
     console.print(f"  [green]✓[/green] [dim]#{task['id']}  [strike]{task['title']}[/strike]{ctx}[/dim]")
-    _print_notes(task)
+    _print_notes(task, show_notes)
+
+
+DUE_GROUPS = [
+    ("overdue", "[bold red]Overdue[/bold red]"),
+    ("today", "[bold]Today[/bold]"),
+    ("none", "[bold]No due date[/bold]"),
+    ("tomorrow", "[bold]Tomorrow[/bold]"),
+    ("week", "[bold]Next 7 days[/bold]"),
+    ("future", "[bold]Future[/bold]"),
+]
+
+
+def _due_group(task: dict, now: datetime) -> str:
+    due = _local_due(task)
+    if due is None:
+        return "none"
+    if due <= now:
+        return "overdue"
+    days = (due.date() - now.date()).days
+    if days == 0:
+        return "today"
+    if days == 1:
+        return "tomorrow"
+    return "week" if days <= 7 else "future"
+
+
+def _print_active_tasks(tasks: list[dict], show_notes: bool) -> None:
+    """Print active tasks under due-date group headings.
+
+    The server already returns them in group order. With no due dates at
+    all, the single 'No due date' heading is noise, so skip headings.
+    """
+    if not any(t.get("due_at") for t in tasks):
+        for t in tasks:
+            _print_active_task(t, show_notes)
+        return
+    now = datetime.now().astimezone()
+    groups: dict[str, list[dict]] = {}
+    for t in tasks:
+        groups.setdefault(_due_group(t, now), []).append(t)
+    for key, heading in DUE_GROUPS:
+        if key in groups:
+            console.print(f"\n{heading} [dim]{len(groups[key])}[/dim]")
+            for t in groups[key]:
+                _print_active_task(t, show_notes)
 
 
 @app.callback()
@@ -316,7 +376,12 @@ def me():
 @app.command()
 def add(
     title: str = typer.Argument(..., help="What are you working on?"),
-    notes: str = typer.Option(None, "--notes", "-n", help="Optional notes"),
+    notes: str = typer.Option(None, "--notes", "-n", help="Background detail. Whenever you add notes, also set --next."),
+    next_action: str = typer.Option(
+        None, "--next", "-x",
+        help="The next concrete action, under 80 characters, e.g. 'Email Dana the revised quote'. "
+             "Always set this when you add notes; it's what shows in the task list.",
+    ),
     context: int = typer.Option(None, "--context", "-c", help="Context ID"),
     due: str = typer.Option(None, "--due", "-d", help="When it's due, e.g. 'tomorrow 3pm', 'in 20m', 'friday'"),
     repeat: str = typer.Option(None, "--repeat", "-r", help=REPEAT_HELP),
@@ -325,12 +390,14 @@ def add(
     title = _validate_title(title)
     recurrence = _normalize_repeat(repeat) if repeat else None
     try:
-        task = api.create_task(title, notes, context, due=due, recurrence=recurrence)
+        task = api.create_task(title, notes, context, due=due, recurrence=recurrence,
+                               next_action=next_action)
     except Exception as exc:
         _handle_api_error(exc)
     if _json_mode:
         _output_json(task)
     console.print(f"[green bold]●[/green bold] Added: [bold]{task['title']}[/bold]  [dim](#{task['id']})[/dim]{_format_due(task)}")
+    _print_notes(task, show_notes=False)
 
 
 @app.command()
@@ -348,14 +415,14 @@ def get(
     icon = status_icon.get(task["status"], "?")
     ctx = f"  [dim][{task['context_name']}][/dim]" if task.get("context_name") else ""
     console.print(f"  {icon} [dim]#{task['id']}[/dim]  {task['title']}{ctx}{_format_due(task)}")
-    if task.get("notes"):
-        console.print(f"       [dim]{task['notes']}[/dim]")
+    _print_notes(task)
     console.print(f"       [dim]Status: {task['status']}  Created: {task['created_at']}[/dim]")
 
 
 @app.command()
 def ls(
     context: int = typer.Option(None, "--context", "-c", help="Filter by context ID"),
+    show_notes: bool = typer.Option(False, "--notes", "-n", help="Show notes (hidden by default)"),
 ):
     """Show what's on your plate right now."""
     try:
@@ -367,8 +434,7 @@ def ls(
     if not tasks:
         console.print("Nothing on your plate. Add something: [bold]doing add 'task name'[/bold]")
         raise typer.Exit()
-    for t in tasks:
-        _print_active_task(t)
+    _print_active_tasks(tasks, show_notes)
 
 
 @app.command()
@@ -495,7 +561,12 @@ def resume(
 def edit(
     task_id: int = typer.Argument(..., help="ID of the task to edit"),
     title: str = typer.Option(None, "--title", "-t", help="New title"),
-    notes: str = typer.Option(None, "--notes", "-n", help="New notes"),
+    notes: str = typer.Option(None, "--notes", "-n", help="New notes. Whenever you change notes, also update --next."),
+    next_action: str = typer.Option(
+        None, "--next", "-x",
+        help="New next action, under 80 characters. Update it whenever you change notes or finish the current one.",
+    ),
+    no_next: bool = typer.Option(False, "--no-next", help="Remove the next action"),
     context: int = typer.Option(None, "--context", "-c", help="Move to context ID"),
     no_context: bool = typer.Option(False, "--no-context", help="Remove context"),
     due: str = typer.Option(None, "--due", "-d", help="When it's due, e.g. 'tomorrow 3pm'"),
@@ -503,7 +574,9 @@ def edit(
     repeat: str = typer.Option(None, "--repeat", "-r", help=REPEAT_HELP),
     no_repeat: bool = typer.Option(False, "--no-repeat", help="Stop repeating"),
 ):
-    """Edit a task's title, notes, context, due date, or repeat."""
+    """Edit a task's title, notes, next action, context, due date, or repeat."""
+    if no_next and next_action is not None:
+        _validation_error("--no-next and --next cannot be used together")
     if no_context and context is not None:
         _validation_error("--no-context and --context cannot be used together")
     if no_due and due is not None:
@@ -511,9 +584,10 @@ def edit(
     if no_repeat and repeat is not None:
         _validation_error("--no-repeat and --repeat cannot be used together")
 
-    if (title is None and notes is None and context is None and not no_context
+    if (title is None and notes is None and next_action is None and not no_next
+            and context is None and not no_context
             and due is None and not no_due and repeat is None and not no_repeat):
-        _validation_error("No changes specified. Use --title, --notes, --context, --due, or --repeat.")
+        _validation_error("No changes specified. Use --title, --notes, --next, --context, --due, or --repeat.")
 
     if title is not None:
         title = _validate_title(title)
@@ -523,12 +597,14 @@ def edit(
         task = api.update_task(task_id, title=title, notes=notes,
                                context_id=context, clear_context=no_context,
                                due=due, clear_due=no_due,
-                               recurrence=recurrence, clear_recurrence=no_repeat)
+                               recurrence=recurrence, clear_recurrence=no_repeat,
+                               next_action="" if no_next else next_action)
     except Exception as exc:
         _handle_api_error(exc)
     if _json_mode:
         _output_json(task)
     console.print(f"[green bold]Updated:[/green bold] {task['title']}  [dim](#{task['id']})[/dim]{_format_due(task)}")
+    _print_notes(task, show_notes=False)
 
 
 @app.command()
@@ -557,6 +633,7 @@ def snooze(
 @app.command()
 def today(
     context: int = typer.Option(None, "--context", "-c", help="Filter by context ID"),
+    show_notes: bool = typer.Option(False, "--notes", "-n", help="Show notes (hidden by default)"),
 ):
     """Show everything from today, grouped by status."""
     try:
@@ -576,19 +653,19 @@ def today(
         raise typer.Exit()
 
     if active:
-        console.print("\n[bold]Active[/bold]")
-        for t in active:
-            _print_active_task(t)
+        if not any(t.get("due_at") for t in active):
+            console.print("\n[bold]Active[/bold]")
+        _print_active_tasks(active, show_notes)
 
     if paused:
         console.print("\n[bold yellow]Paused[/bold yellow]")
         for t in paused:
-            _print_paused_task(t)
+            _print_paused_task(t, show_notes)
 
     if done_tasks:
         console.print("\n[bold]Done[/bold]")
         for t in done_tasks:
-            _print_done_task(t)
+            _print_done_task(t, show_notes)
 
     console.print()
 

@@ -69,10 +69,13 @@ def get_me() -> dict:
 
 
 def create_task(title: str, notes: str | None = None, context_id: int | None = None,
-                due: str | None = None, recurrence: str | None = None) -> dict:
+                due: str | None = None, recurrence: str | None = None,
+                next_action: str | None = None) -> dict:
     payload: dict = {"title": title}
     if notes is not None:
         payload["notes"] = notes
+    if next_action is not None:
+        payload["next_action"] = next_action
     if context_id is not None:
         payload["context_id"] = context_id
     if due is not None:
@@ -145,12 +148,16 @@ def resume_task(task_id: int) -> dict:
 def update_task(task_id: int, title: str | None = None, notes: str | None = None,
                 context_id: int | None = None, clear_context: bool = False,
                 due: str | None = None, recurrence: str | None = None,
-                clear_due: bool = False, clear_recurrence: bool = False) -> dict:
+                clear_due: bool = False, clear_recurrence: bool = False,
+                next_action: str | None = None) -> dict:
+    """An empty next_action clears it."""
     payload: dict = {}
     if title is not None:
         payload["title"] = title
     if notes is not None:
         payload["notes"] = notes
+    if next_action is not None:
+        payload["next_action"] = next_action
     if clear_context:
         payload["clear_context"] = True
     elif context_id is not None:
