@@ -59,7 +59,8 @@ doing apikey --key doing_xxxxx
 | `doing snooze <id> [10m\|1h\|3h\|1d\|morning]` | Push a due task back (default 10m) |
 | `doing rm <id>` | Delete a task |
 | `doing ls` | List active tasks, grouped by due date (`-c` context ID, `-n` show notes) |
-| `doing log` | Show tasks done today (`-d YYYY-MM-DD`, `-c` context ID) |
+| `doing log` | Show tasks done today, with the next actions finished that day (`-d YYYY-MM-DD`, `-c` context ID) |
+| `doing history <id>` | Show a task's completed next actions (`-n` notes, `--rm N` delete step N) |
 | `doing today` | Show all tasks grouped by status (`-c` context ID, `-n` show notes) |
 | `doing clear` | Mark all active tasks as done |
 | `doing contexts` | List contexts |
@@ -83,6 +84,18 @@ doing edit 341 --no-next
 **For AI agents:** whenever you add or change notes, also set `--next` to a short next action in the imperative, under 80 characters (for example `--next "Email Dana the revised quote"`). When you finish it, replace it with the one after it.
 
 Active tasks are listed in groups: Overdue, Today, No due date, Tomorrow, Next 7 days, Future.
+
+### History
+
+Replacing or clearing a next action logs the old one as a completed step, with when it happened, who did it (web, mobile, CLI, or the API key's name), and the notes at that moment. Marking a task done logs its last next action too, and reopening the task puts it back. A correction within 5 minutes from the same source isn't logged, so fixing a typo doesn't count as finishing a step.
+
+```bash
+doing history 341            # completed steps, newest first
+doing history 341 -n         # with the notes saved with each step
+doing history 341 --rm 2     # delete step 2
+doing log                    # done today, with steps finished today under each task
+doing --json log --steps     # {date, done, in_progress}, each task with that day's steps
+```
 
 ## Due dates and reminders
 

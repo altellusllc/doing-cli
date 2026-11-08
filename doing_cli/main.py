@@ -235,6 +235,35 @@ def _print_done_task(task: dict, show_notes: bool = True) -> None:
     _print_notes(task, show_notes)
 
 
+def _local_time(value: str) -> datetime:
+    moment = datetime.fromisoformat(value)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone()
+
+
+def _format_source(source: str) -> str:
+    """'key:claude-laptop' -> a highlighted key name; channels stay plain."""
+    if source.startswith("key:"):
+        return f"[magenta]{escape(source[4:])}[/magenta]"
+    return f"[dim]{escape(source)}[/dim]"
+
+
+def _format_when(moment: datetime) -> str:
+    now = datetime.now().astimezone()
+    if moment.date() == now.date():
+        return moment.strftime("Today %-I:%M %p")
+    if (now.date() - moment.date()).days < 7:
+        return moment.strftime("%a %-I:%M %p")
+    return moment.strftime("%b %-d %-I:%M %p")
+
+
+def _steps_on(task: dict, day: str) -> list[dict]:
+    """The task's completed steps on a local YYYY-MM-DD, newest first."""
+    return [s for s in task.get("next_action_history", [])
+            if _local_time(s["completed_at"]).date().isoformat() == day]
+
+
 DUE_GROUPS = [
     ("overdue", "[bold red]Overdue[/bold red]"),
     ("today", "[bold]Today[/bold]"),
@@ -441,22 +470,97 @@ def ls(
 def log(
     date: str = typer.Option(None, "--date", "-d", help="Date (YYYY-MM-DD), defaults to today"),
     context: int = typer.Option(None, "--context", "-c", help="Filter by context ID"),
+    steps: bool = typer.Option(
+        False, "--steps", "-s",
+        help="With --json: return {date, done, in_progress}, each task with that day's completed steps",
+    ),
 ):
-    """List tasks marked done today (or on a given date)."""
-    from datetime import date as date_cls
-    query_date = date if date else date_cls.today().isoformat()
+    """List tasks marked done today (or on a given date), with the next actions finished that day."""
+    from datetime import date as date_cls, timedelta
     try:
-        tasks = api.list_tasks(status="done", date=query_date, context_id=context)
+        query_date = date_cls.fromisoformat(date) if date else date_cls.today()
+    except ValueError:
+        _validation_error("--date must be YYYY-MM-DD")
+    day = query_date.isoformat()
+    try:
+        history = api.get_done_history(
+            limit=1, before=(query_date + timedelta(days=1)).isoformat(), context_id=context
+        )
     except Exception as exc:
         _handle_api_error(exc)
+    group = next((d for d in history["days"] if d["date"] == day), None)
+    done_tasks = group["tasks"] if group else []
+    in_progress = group.get("in_progress", []) if group else []
     if _json_mode:
-        _output_json(tasks)
-    if not tasks:
-        label = query_date if date else "today"
+        if not steps:
+            # Kept as a plain list of done tasks for existing scripts
+            _output_json(done_tasks)
+        _output_json({
+            "date": day,
+            "done": [{**t, "steps": _steps_on(t, day)} for t in done_tasks],
+            "in_progress": [{**t, "steps": _steps_on(t, day)} for t in in_progress],
+        })
+    if not done_tasks and not in_progress:
+        label = day if date else "today"
         console.print(f"Nothing marked done {label}.")
         raise typer.Exit()
-    for t in tasks:
-        _print_done_task(t)
+    for t in done_tasks:
+        _print_done_task(t, show_notes=False)
+        _print_steps(_steps_on(t, day))
+    for t in in_progress:
+        ctx = f"  [dim][{t['context_name']}][/dim]" if t.get("context_name") else ""
+        console.print(f"  [yellow]◐[/yellow] [dim]#{t['id']}[/dim]  {t['title']}{ctx}  [yellow]in progress[/yellow]")
+        _print_steps(_steps_on(t, day))
+
+
+def _print_steps(steps: list[dict]) -> None:
+    for step in steps:
+        when = _local_time(step["completed_at"]).strftime("%-I:%M %p")
+        final = "  [green]final[/green]" if step.get("final") else ""
+        console.print(f"      [green]✓[/green] {escape(step['text'])}  [dim]{when}[/dim]{final}")
+
+
+@app.command()
+def history(
+    task_id: int = typer.Argument(..., help="ID of the task"),
+    show_notes: bool = typer.Option(False, "--notes", "-n", help="Show the notes saved with each step"),
+    rm: int = typer.Option(None, "--rm", help="Delete step N (as numbered in this list)"),
+):
+    """Show the next actions completed on a task, newest first."""
+    try:
+        task = api.get_task(task_id)
+    except Exception as exc:
+        _handle_api_error(exc)
+    steps = task.get("next_action_history", [])
+    if rm is not None:
+        if not 1 <= rm <= len(steps):
+            _validation_error(f"--rm must be between 1 and {len(steps)}" if steps else "This task has no history")
+        step = steps[rm - 1]
+        try:
+            api.delete_history_step(task_id, step["id"])
+        except Exception as exc:
+            _handle_api_error(exc)
+        if _json_mode:
+            _output_json({"deleted": True, "id": step["id"]})
+        console.print(f"[green bold]Deleted step:[/green bold] {escape(step['text'])}")
+        raise typer.Exit()
+    if _json_mode:
+        _output_json(steps)
+    console.print(f"[bold]#{task['id']} {escape(task['title'])}[/bold]")
+    if task.get("next_action"):
+        console.print(f"  [green]→ {escape(task['next_action'])}[/green]  [dim]now[/dim]")
+    if not steps:
+        console.print("  [dim]No completed steps yet.[/dim]")
+        raise typer.Exit()
+    for i, step in enumerate(steps, 1):
+        final = "  [green]final[/green]" if step.get("final") else ""
+        when = _format_when(_local_time(step["completed_at"]))
+        console.print(
+            f"  [dim]{i:>2}[/dim] [green]✓[/green] {escape(step['text'])}  "
+            f"[dim]{when}[/dim]  {_format_source(step['source'])}{final}"
+        )
+        if show_notes and step.get("notes"):
+            console.print(f"         [dim]{escape(step['notes'])}[/dim]")
 
 
 @app.command()
@@ -593,6 +697,14 @@ def edit(
         title = _validate_title(title)
     recurrence = _normalize_repeat(repeat) if repeat else None
 
+    before = None
+    if not _json_mode and (next_action is not None or no_next):
+        # To say whether the old next action was logged as a completed step
+        try:
+            before = api.get_task(task_id)
+        except Exception as exc:
+            _handle_api_error(exc)
+
     try:
         task = api.update_task(task_id, title=title, notes=notes,
                                context_id=context, clear_context=no_context,
@@ -604,6 +716,11 @@ def edit(
     if _json_mode:
         _output_json(task)
     console.print(f"[green bold]Updated:[/green bold] {task['title']}  [dim](#{task['id']})[/dim]{_format_due(task)}")
+    if before and before.get("next_action") and before["next_action"] != task.get("next_action"):
+        if len(task.get("next_action_history", [])) > len(before.get("next_action_history", [])):
+            console.print(f"  [dim]logged step: {escape(before['next_action'])}[/dim]")
+        else:
+            console.print("  [dim](changed within 5 min, previous step not logged)[/dim]")
     _print_notes(task, show_notes=False)
 
 

@@ -40,7 +40,8 @@ def _tz_params() -> dict:
 
 
 def _client() -> httpx.Client:
-    headers = {}
+    # Credits next action changes to the CLI (an API key's name takes priority server-side)
+    headers = {"X-Doing-Client": "cli"}
     token = load_token()
     if token:
         headers["Authorization"] = f"Bearer {token}"
@@ -187,6 +188,12 @@ def snooze_task(task_id: int, minutes: int | None = None, preset: str | None = N
 def delete_task(task_id: int) -> None:
     with _client() as c:
         r = c.delete(f"/tasks/{task_id}")
+        r.raise_for_status()
+
+
+def delete_history_step(task_id: int, step_id: int) -> None:
+    with _client() as c:
+        r = c.delete(f"/tasks/{task_id}/history/{step_id}")
         r.raise_for_status()
 
 
